@@ -100,8 +100,11 @@ def solve(
 
     best: Plan | None = None
     for seed in seed_options:
-        # 同一商品不应被重复计入；不同类别正常不会重复，这里额外防御。
-        seed_items = list(dict.fromkeys(seed))
+        seed_items: list[Item] = []
+        for item in seed:
+            if item not in seed_items:
+                seed_items.append(item)
+
         plan = Plan(items=seed_items)
         if plan.kcal > meal_cap:
             continue
