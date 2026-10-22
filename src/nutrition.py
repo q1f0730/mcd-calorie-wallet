@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from itertools import product
 
 
 @dataclass
@@ -65,8 +66,8 @@ def solve(
     - 命中忌口关键词的商品直接剔除；
     - 营养数据缺失（kcal<=0 且非明确 0 卡饮品）剔除；
     - 必须包含 require_categories 中每一类至少一件；
-    - 剩余空间用偏好收益/kcal 比值最高的商品填满（贪心 + 主件枚举，
-      对菜单规模（几十件）足够精确且可解释）。
+    - 剩余空间用偏好收益/kcal 比值最高的商品填满；
+    - main 最多 1 件，其余类别最多 2 件。
     """
     excludes = [e.strip().lower() for e in (excludes or []) if e.strip()]
     # 扩展匹配词：如"鸡肉"也能拦住"麦辣鸡翅"（去掉尾部类目词后的核心字）
@@ -87,26 +88,37 @@ def solve(
     by_cat: dict[str, list[Item]] = {}
     for it in pool:
         by_cat.setdefault(it.category, []).append(it)
-    for cat in require_categories:
+
+    required = tuple(dict.fromkeys(require_categories))
+    for cat in required:
         if cat not in by_cat:
             return None  # 硬约束无解，上层应提示用户放宽条件
 
-    best: Plan | None = None
-    mains = by_cat.get("main", [])
-    others = [i for c, lst in by_cat.items() for i in lst if c != "main"]
-    others.sort(key=lambda i: i.preference / max(i.kcal, 1), reverse=True)
+    seed_groups = [by_cat[cat] for cat in required]
+    seed_options = product(*seed_groups) if seed_groups else [()]
+    ranked = sorted(pool, key=lambda i: i.preference / max(i.kcal, 1), reverse=True)
 
-    for main in mains:
-        if main.kcal > meal_cap:
+    best: Plan | None = None
+    for seed in seed_options:
+        # 同一商品不应被重复计入；不同类别正常不会重复，这里额外防御。
+        seed_items = list(dict.fromkeys(seed))
+        plan = Plan(items=seed_items)
+        if plan.kcal > meal_cap:
             continue
-        plan = Plan(items=[main])
-        for extra in others:
-            # 每类最多取 2 件（避免堆一堆 0 卡饮料凑数）
-            if plan.kcal + extra.kcal <= meal_cap:
-                cat = extra.category
-                if sum(1 for i in plan.items if i.category == cat) >= 2:
-                    continue
-                plan.items.append(extra)
+
+        for extra in ranked:
+            if extra in plan.items:
+                continue
+            if plan.kcal + extra.kcal > meal_cap:
+                continue
+
+            cat = extra.category
+            limit = 1 if cat == "main" else 2
+            if sum(1 for i in plan.items if i.category == cat) >= limit:
+                continue
+            plan.items.append(extra)
+
+        # 先满足硬约束，再沿用原行为：尽量利用本餐热量额度。
         if best is None or plan.kcal > best.kcal:
             best = plan
 
